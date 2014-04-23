@@ -45,7 +45,12 @@
  * be arbitrary), but this implementation only uses R=1, W=K (and the
  * choice of the R=1 lock to take for lock_shared is chosen randomly).
  */
-template<class SharedTimedMutex, size_t bits=4>
+template<
+  class SharedTimedMutex,
+  size_t bits=4,
+  class Engine=std::default_random_engine,
+  class RandomGenerator=std::independent_bits_engine<Engine, bits, std::uint_fast64_t>
+  >
 class dyn_lock {
   friend class shared_timed_mutex;
 
@@ -57,8 +62,6 @@ class dyn_lock {
 
 public:
   class shared_timed_mutex {
-    typedef std::independent_bits_engine<std::default_random_engine, bits, std::uint_fast64_t> generator_type;
-
 #ifdef _GLIBCXX_USE_CLOCK_MONOTONIC
     typedef std::chrono::steady_clock 	  	__clock_t;
 #else
@@ -66,7 +69,7 @@ public:
 #endif
 
     dyn_lock &_dlock;
-    generator_type _gen;
+    RandomGenerator _gen;
     std::uint_fast64_t _lockid;
 
   public:
