@@ -36,13 +36,14 @@
 /**
  * dyn_lock is a proof of concept of dynamo-style hashing applied to
  * readers-writer locking (the SharedTimedMutex concept).  A single
- * dyn_lock provides a shared mutex facility on keys of type T.
+ * dyn_lock provides a shared mutex facility for a single resource.
  *
  * If read locks don't scale well, this spreads them out over K read
  * locks, at the expense of write locks, which now must take K locks.  In
- * general, if we choose K hash functions, readers must take R locks and
- * writers must take W locks such that R+W > K, but this implementation
- * only uses R=1, W=K.
+ * general, if we pick K locks, readers must take R locks and writers must
+ * take W locks such that R+W > K (and the choice of such R or W locks can
+ * be arbitrary), but this implementation only uses R=1, W=K (and the
+ * choice of the R=1 lock to take for lock_shared is chosen randomly).
  */
 template<class SharedTimedMutex, size_t bits=4>
 class dyn_lock {
