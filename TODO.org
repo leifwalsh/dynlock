@@ -1,0 +1,5 @@
+* timed locking facilities (try_lock*)
+* move K, R, W parameters in to dyn_lock::shared_mutex
+  the dyn_lock itself shouldn't determine those parameters for all mutexes
+  it provides
+* tests
