@@ -30,8 +30,7 @@
 
 #pragma once
 
-#include <algorithm>
-#include <functional>
+#include <chrono>
 #include <random>
 
 /**
@@ -42,175 +41,117 @@
  * If read locks don't scale well, this spreads them out over K read
  * locks, at the expense of write locks, which now must take K locks.  In
  * general, if we choose K hash functions, readers must take R locks and
- * writers must take W locks such that R+W > K.
+ * writers must take W locks such that R+W > K, but this implementation
+ * only uses R=1, W=K.
  */
-template<class SharedMutex, size_t N=1<<10, size_t K=8, size_t R=1, size_t W=K>
+template<class SharedTimedMutex, size_t bits=4>
 class dyn_lock {
-  SharedMutex _locks[N];
+  friend class shared_timed_mutex;
 
-  template<class T>
-  static size_t h(size_t i, const T &key) {
-    static std::hash<size_t> ih;
-    static std::hash<T> th;
-    return ih(i) ^ th(key);
+  static constexpr size_t K() {
+    return 1 << bits;
   }
 
-  template<class T>
-  SharedMutex &get_lock(size_t i, const T &key) {
-    return _locks[h(i, key) % N];
-  }
-
-  static std::vector<size_t> array_of_K() {
-    std::vector<size_t> vec(K);
-    size_t i = 0;
-    std::generate(vec.begin(), vec.end(), [&i]() { return i++; });
-    return vec;
-  }
-
-  static std::vector<size_t> hash_choices(size_t k) {
-    static const std::vector<size_t> all = array_of_K();
-    std::vector<size_t> choices = all;
-    std::random_shuffle(choices.begin(), choices.end());
-    choices.resize(k);
-    std::sort(choices.begin(), choices.end());
-    return choices;
-  }
+  SharedTimedMutex _locks[K()];
 
 public:
-  typedef std::vector<size_t> token;
+  class shared_timed_mutex {
+    typedef std::independent_bits_engine<std::default_random_engine, bits, std::uint_fast64_t> generator_type;
 
-  template<class T>
-  token lock(const T &key) {
-    token tok = hash_choices(W);
-    std::for_each(tok.begin(), tok.end(), [this, key](size_t i) {
-        get_lock(i, key).lock();
-      });
-    return tok;
-  }
-  template<class T>
-  void unlock(const T &key, const token &tok) {
-    std::for_each(tok.begin(), tok.end(), [this, key](size_t i) {
-        get_lock(i, key).unlock();
-      });
-  }
+#ifdef _GLIBCXX_USE_CLOCK_MONOTONIC
+    typedef std::chrono::steady_clock 	  	__clock_t;
+#else
+    typedef std::chrono::high_resolution_clock 	__clock_t;
+#endif
 
-  template<class T>
-  token lock_shared(const T &key) {
-    token tok = hash_choices(W);
-    std::for_each(tok.begin(), tok.end(), [this, key](size_t i) {
-        get_lock(i, key).lock_shared();
-      });
-    return tok;
-  }
-  template<class T>
-  void unlock_shared(const T &key, const token &tok) {
-    std::for_each(tok.begin(), tok.end(), [this, key](size_t i) {
-        get_lock(i, key).unlock_shared();
-      });
-  }
-
-  template<class T>
-  class shared_mutex {
     dyn_lock &_dlock;
-    const T &_key;
-    token _tok;
+    generator_type _gen;
+    std::uint_fast64_t _lockid;
 
   public:
-    shared_mutex(dyn_lock &dlock, const T &key)
-      : _dlock(dlock), _key(key)
-    {}
+    shared_timed_mutex(dyn_lock &dlock) : _dlock(dlock) {}
 
     void lock() {
-      _tok = _dlock.lock(_key);
+      for (size_t i = 0; i < K(); ++i) {
+        _dlock._locks[i].lock();
+      }
+    }
+
+    void try_lock() {
+      bool ret = true;
+      size_t i;
+      for (i = 0; i < K(); ++i) {
+        if (!_dlock._locks[i].try_lock()) {
+          ret = false;
+          break;
+        }
+      }
+      if (!ret) {
+        while (--i >= 0) {
+          _dlock._locks[i].unlock();
+        }
+      }
+      return ret;
+    }
+
+    template<typename _Clock, typename _Duration>
+    bool try_lock_until(const std::chrono::time_point<_Clock, _Duration>& __atime) {
+      bool ret = true;
+      size_t i;
+      for (i = 0; i < K(); ++i) {
+        if (!_dlock._locks[i].try_lock_until(__atime)) {
+          ret = false;
+          break;
+        }
+      }
+      if (!ret) {
+        while (--i >= 0) {
+          _dlock._locks[i].unlock();
+        }
+      }
+      return ret;
+    }
+
+    template<typename _Rep, typename _Period>
+    bool try_lock_for(const std::chrono::duration<_Rep, _Period>& __rtime) {
+      auto __rt = std::chrono::duration_cast<__clock_t::duration>(__rtime);
+      if (std::ratio_greater<__clock_t::period, _Period>()) {
+        ++__rt;
+      }
+
+      return try_lock_until(__clock_t::now() + __rt);
     }
 
     void unlock() {
-      _dlock.unlock(_key, _tok);
+      for (size_t i = 0; i < K(); ++i) {
+        _dlock._locks[i].unlock();
+      }
     }
 
     void lock_shared() {
-      _tok = _dlock.lock_shared(_key);
+      _lockid = _gen();
+      _dlock._locks[_lockid].lock_shared();
+    }
+
+    bool try_lock_shared() {
+      _lockid = _gen();
+      return _dlock._locks[_lockid].try_lock_shared();
+    }
+
+    template<typename _Clock, typename _Duration>
+    bool try_lock_shared_until(const std::chrono::time_point<_Clock, _Duration>& __atime) {
+      _lockid = _gen();
+      return _dlock._locks[_lockid].try_lock_shared_until(__atime);
+    }
+
+    template<typename _Rep, typename _Period>
+    bool try_lock_shared_for(const std::chrono::duration<_Rep, _Period>& __rtime) {
+      _lockid = _gen();
+      return _dlock._locks[_lockid].try_lock_shared_for(__rtime);
     }
 
     void unlock_shared() {
-      _dlock.unlock_shared(_key, _tok);
-    }
-  };
-};
-
-// Optimize for the special case of R=1, W=K, we don't need to mess around
-// with vectors in this case.
-template<class SharedMutex, size_t N, size_t K>
-class dyn_lock<SharedMutex, N, K, 1, K> {
-  SharedMutex _locks[N];
-
-  template<class T>
-  static size_t h(size_t i, const T &key) {
-    static std::hash<size_t> ih;
-    static std::hash<T> th;
-    return ih(i) ^ th(key);
-  }
-
-  template<class T>
-  SharedMutex &get_lock(size_t i, const T &key) {
-    return _locks[h(i, key) % N];
-  }
-
-public:
-  typedef size_t token;
-
-  template<class T>
-  token lock(const T &key) {
-    for (size_t i = 0; i < K; ++i) {
-      get_lock(i, key).lock();
-    }
-    return 0;
-  }
-  template<class T>
-  void unlock(const T &key, const token &) {
-    for (size_t i = 0; i < K; ++i) {
-      get_lock(i, key).unlock();
-    }
-  }
-
-  template<class T>
-  token lock_shared(const T &key) {
-    static std::default_random_engine generator;
-    static std::uniform_int_distribution<size_t> dist(0, K-1);
-    size_t i = dist(generator);
-    get_lock(i, key).lock_shared();
-    return i;
-  }
-  template<class T>
-  void unlock_shared(const T &key, const token &tok) {
-    get_lock(tok, key).unlock_shared();
-  }
-
-  template<class T>
-  class shared_mutex {
-    dyn_lock &_dlock;
-    const T &_key;
-    token _tok;
-
-  public:
-    shared_mutex(dyn_lock &dlock, const T &key)
-      : _dlock(dlock), _key(key)
-    {}
-
-    void lock() {
-      _tok = _dlock.lock(_key);
-    }
-
-    void unlock() {
-      _dlock.unlock(_key, _tok);
-    }
-
-    void lock_shared() {
-      _tok = _dlock.lock_shared(_key);
-    }
-
-    void unlock_shared() {
-      _dlock.unlock_shared(_key, _tok);
+      _dlock._locks[_lockid].unlock_shared();
     }
   };
 };

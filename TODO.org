@@ -1,5 +1,6 @@
-* timed locking facilities (try_lock*)
+* timed locking facilities for hashtable version (try_lock*)
 * move K, R, W parameters in to dyn_lock::shared_mutex
   the dyn_lock itself shouldn't determine those parameters for all mutexes
   it provides
+* fix deadlocks in hashtable version (maybe recursive locks?)
 * tests

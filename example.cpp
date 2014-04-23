@@ -9,9 +9,8 @@
 
 int main(void) {
   dyn_lock<boost::shared_mutex> dl;
-  std::string key("fizz");
-  typedef dyn_lock<boost::shared_mutex>::shared_mutex<std::string> DMutex;
-  DMutex mut(dl, key);
+  typedef dyn_lock<boost::shared_mutex>::shared_timed_mutex DMutex;
+  DMutex mut(dl);
 
   {
     std::unique_lock<DMutex> _(mut);
