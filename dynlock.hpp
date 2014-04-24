@@ -81,7 +81,7 @@ public:
       }
     }
 
-    void try_lock() {
+    bool try_lock() {
       bool ret = true;
       size_t i;
       for (i = 0; i < K(); ++i) {
